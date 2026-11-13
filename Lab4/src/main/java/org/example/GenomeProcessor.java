@@ -1,7 +1,6 @@
 package org.example;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
@@ -9,74 +8,111 @@ public class GenomeProcessor {
 
     private final Random random = new Random();
 
-    public List<String> splitGenome(String genome, int a, int b) {
-        List<String> subsequences = new ArrayList<>();
-        int currentPos = 0;
-        int minOverlap = 10;
-
-        while (currentPos < genome.length()) {
-            int length = random.nextInt(b - a + 1) + a;
-            int end = Math.min(currentPos + length, genome.length());
-            subsequences.add(genome.substring(currentPos, end));
-            
-            if (end >= genome.length()) {
-                break;
-            }
-            
-            // To ensure an overlap of at least 10, the next fragment should start 10 chars before the current end.
-            // We assume a > 10 as per the requirement "minimum overlap has to be at least 10".
-            currentPos = end - minOverlap;
-            
-            // Safety check: ensure we always move forward even if a is small
-            if (currentPos <= subsequences.get(subsequences.size() - 1).length() - length) {
-                // This shouldn't happen if a > minOverlap
-            }
+    public List<String> sampleGenome(String genome, int numSamples, int minLength, int maxLength) {
+        List<String> samples = new ArrayList<>();
+        if (genome == null || genome.isEmpty() || numSamples <= 0) {
+            return samples;
         }
 
-        return subsequences;
+        for (int i = 0; i < numSamples; i++) {
+            int length = random.nextInt(maxLength - minLength + 1) + minLength;
+            if (length > genome.length()) {
+                length = genome.length();
+            }
+            
+            int maxStart = genome.length() - length;
+            int start = maxStart > 0 ? random.nextInt(maxStart + 1) : 0;
+            samples.add(genome.substring(start, start + length));
+        }
+
+        return samples;
     }
 
-    public String rebuildGenome(List<String> fragments) {
-        if (fragments == null || fragments.isEmpty()) {
+    public String reconstructGenome(List<String> samples, int minOverlap) {
+        if (samples == null || samples.isEmpty()) {
             return "";
         }
+
+        // De Bruijn Graph approach for 20000 reads is better.
+        // But since the task says "find overlaps", I'll use an Overlap Graph approach.
+        // To make it fast, we can use a Greedy approach with a better data structure.
         
-        List<String> remaining = new ArrayList<>(fragments);
-        String genome = remaining.remove(0);
-
-        while (!remaining.isEmpty()) {
-            boolean found = false;
-            for (int i = 0; i < remaining.size(); i++) {
-                String fragment = remaining.get(i);
-
-                int overlap = findOverlap(genome, fragment);
-                if (overlap >= 10) {
-                    genome = genome + fragment.substring(overlap);
-                    remaining.remove(i);
-                    found = true;
-                    break;
+        java.util.LinkedList<String> reads = new java.util.LinkedList<>(samples);
+        
+        // Let's use a simpler but faster greedy: 
+        // 1. Pick a read.
+        // 2. Find anything that overlaps with its end.
+        // 3. Repeat.
+        
+        if (reads.isEmpty()) return "";
+        
+        StringBuilder reconstructed = new StringBuilder(reads.removeFirst());
+        
+        boolean added = true;
+        while (added) {
+            added = false;
+            
+            // Try to add to the end
+            String currentEnd = reconstructed.substring(Math.max(0, reconstructed.length() - 150));
+            int bestOverlap = -1;
+            int bestIdx = -1;
+            
+            java.util.Iterator<String> it = reads.iterator();
+            int idx = 0;
+            while (it.hasNext()) {
+                String read = it.next();
+                int overlap = getOverlap(currentEnd, read);
+                if (overlap >= minOverlap) {
+                    if (overlap > bestOverlap) {
+                        bestOverlap = overlap;
+                        bestIdx = idx;
+                        if (bestOverlap > 50) break; // Good enough
+                    }
                 }
-
-                overlap = findOverlap(fragment, genome);
-                if (overlap >= 10) {
-                    genome = fragment + genome.substring(overlap);
-                    remaining.remove(i);
-                    found = true;
-                    break;
+                idx++;
+            }
+            
+            if (bestIdx != -1) {
+                String bestRead = reads.remove(bestIdx);
+                reconstructed.append(bestRead.substring(bestOverlap));
+                added = true;
+            }
+            
+            // Also try to add to the beginning
+            if (!added) {
+                String currentStart = reconstructed.substring(0, Math.min(reconstructed.length(), 150));
+                it = reads.iterator();
+                idx = 0;
+                while (it.hasNext()) {
+                    String read = it.next();
+                    int overlap = getOverlap(read, currentStart);
+                    if (overlap >= minOverlap) {
+                        if (overlap > bestOverlap) {
+                            bestOverlap = overlap;
+                            bestIdx = idx;
+                            if (bestOverlap > 50) break;
+                        }
+                    }
+                    idx++;
+                }
+                if (bestIdx != -1) {
+                    String bestRead = reads.remove(bestIdx);
+                    reconstructed.insert(0, bestRead.substring(0, bestRead.length() - bestOverlap));
+                    added = true;
                 }
             }
             
-            if (!found) {
-                break; 
+            if (reads.size() % 1000 == 0) {
+                System.out.println("Remaining reads: " + reads.size() + ", Current length: " + reconstructed.length());
             }
         }
 
-        return genome;
+        return reconstructed.toString();
     }
 
-    private int findOverlap(String s1, String s2) {
-        int maxOverlap = Math.min(s1.length(), s2.length());
-        for (int len = maxOverlap; len >= 10; len--) {
+    private int getOverlap(String s1, String s2) {
+        int maxLen = Math.min(s1.length(), s2.length());
+        for (int len = maxLen; len >= 1; len--) {
             if (s1.endsWith(s2.substring(0, len))) {
                 return len;
             }
